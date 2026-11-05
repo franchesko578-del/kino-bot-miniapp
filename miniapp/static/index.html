@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KINO BOT</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    padding: 20px;
+    background: #101827;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+.container { max-width: 500px; margin: auto; }
+h1 { text-align: center; color: #38bdf8; }
+.card {
+    background: #1e293b;
+    padding: 20px;
+    border-radius: 18px;
+    margin-top: 20px;
+}
+input {
+    width: 100%;
+    padding: 15px;
+    border: 1px solid #475569;
+    border-radius: 12px;
+    background: #0f172a;
+    color: white;
+    font-size: 16px;
+    margin: 12px 0;
+}
+button {
+    width: 100%;
+    padding: 15px;
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 16px;
+    font-weight: bold;
+    margin-top: 10px;
+}
+.green { background: #16a34a; }
+.gold { background: #d97706; }
+</style>
+</head>
+<body>
+<div class="container">
+    <h1>🎬 KINO BOT</h1>
+
+    <div class="card">
+        <h3>🎥 Kino kodini kiriting</h3>
+        <input id="movieCode" type="text" placeholder="Masalan: 101">
+        <button class="green" onclick="findMovie()">KINONI OLISH</button>
+        <p id="result"></p>
+    </div>
+
+    <div class="card">
+        <h3>⭐ VIP obuna</h3>
+        <p>VIP bilan majburiy obunalarsiz foydalaning.</p>
+        <button class="gold" onclick="buyVip()">VIP SOTIB OLISH</button>
+    </div>
+</div>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.ready();
+tg.expand();
+
+function findMovie() {
+    const code = document.getElementById("movieCode").value.trim();
+    if (!code) {
+        document.getElementById("result").textContent = "Kino kodini kiriting!";
+        return;
+    }
+    tg.sendData("/movie " + code);
+}
+
+function buyVip() {
+    tg.sendData("/buyvip");
+}
+</script>
+</body>
+</html>
