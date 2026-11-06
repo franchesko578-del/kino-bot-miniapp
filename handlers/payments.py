@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
-from aiogram import Router
+
+from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, LabeledPrice, PreCheckoutQuery
 from sqlalchemy import select
@@ -12,8 +13,7 @@ VIP_STARS = 100
 VIP_DAYS = 30
 
 
-@router.message(Command("buyvip"))
-async def buy_vip(message: Message):
+async def send_vip_invoice(message: Message):
     await message.answer_invoice(
         title="VIP obuna",
         description="30 kunlik VIP obuna",
@@ -24,9 +24,24 @@ async def buy_vip(message: Message):
     )
 
 
+@router.message(Command("buyvip"))
+async def buy_vip(message: Message):
+    await send_vip_invoice(message)
+
+
+@router.message(F.web_app_data)
+async def webapp_vip(message: Message):
+    if message.web_app_data.data.strip() == "/buyvip":
+        await send_vip_invoice(message)
+
+
 @router.pre_checkout_query()
 async def pre_checkout(query: PreCheckoutQuery):
-    if query.invoice_payload == "vip_30_days" and query.currency == "XTR" and query.total_amount == VIP_STARS:
+    if (
+        query.invoice_payload == "vip_30_days"
+        and query.currency == "XTR"
+        and query.total_amount == VIP_STARS
+    ):
         await query.answer(ok=True)
     else:
         await query.answer(ok=False, error_message="To‘lov noto‘g‘ri.")
@@ -36,7 +51,11 @@ async def pre_checkout(query: PreCheckoutQuery):
 async def successful_payment(message: Message):
     payment = message.successful_payment
 
-    if payment.invoice_payload != "vip_30_days" or payment.currency != "XTR" or payment.total_amount != VIP_STARS:
+    if (
+        payment.invoice_payload != "vip_30_days"
+        or payment.currency != "XTR"
+        or payment.total_amount != VIP_STARS
+    ):
         await message.answer("To‘lov tasdiqlanmadi.")
         return
 
@@ -56,11 +75,14 @@ async def successful_payment(message: Message):
             await session.flush()
 
         now = datetime.utcnow()
-        start = user.vip_until if user.is_vip and user.vip_until and user.vip_until > now else now
+        start = (
+            user.vip_until
+            if user.is_vip and user.vip_until and user.vip_until > now
+            else now
+        )
 
         user.is_vip = True
         user.vip_until = start + timedelta(days=VIP_DAYS)
-
         await session.commit()
 
-    await message.answer("VIP obunangiz 30 kunga faollashtirildi!")
+    await message.answer("⭐ VIP obunangiz 30 kunga faollashtirildi!")
