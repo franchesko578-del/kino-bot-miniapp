@@ -11,9 +11,18 @@ ADMIN_IDS = {
     if x.strip().isdigit()
 }
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite+aiosqlite:///kino.db"
-)
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
+def _db_url(url: str) -> str:
+    # Render/Heroku "postgres://" yoki "postgresql://" beradi, SQLAlchemy async uchun driver kerak
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+DATABASE_URL = _db_url(os.getenv("DATABASE_URL", "sqlite+aiosqlite:///kino.db"))
+
+WEBAPP_URL = (
+    os.getenv("WEBAPP_URL") or os.getenv("RENDER_EXTERNAL_URL") or ""
+).strip().rstrip("/")

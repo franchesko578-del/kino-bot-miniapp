@@ -1,86 +1,50 @@
 <!DOCTYPE html>
-<html lang="uz">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html lang="uz"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>KINO BOT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>
-* { box-sizing: border-box; }
-body {
-    margin: 0;
-    padding: 20px;
-    background: #101827;
-    color: white;
-    font-family: Arial, sans-serif;
-}
-.container { max-width: 500px; margin: auto; }
-h1 { text-align: center; color: #38bdf8; }
-.card {
-    background: #1e293b;
-    padding: 20px;
-    border-radius: 18px;
-    margin-top: 20px;
-}
-input {
-    width: 100%;
-    padding: 15px;
-    border: 1px solid #475569;
-    border-radius: 12px;
-    background: #0f172a;
-    color: white;
-    font-size: 16px;
-    margin: 12px 0;
-}
-button {
-    width: 100%;
-    padding: 15px;
-    border: none;
-    border-radius: 12px;
-    color: white;
-    font-size: 16px;
-    font-weight: bold;
-    margin-top: 10px;
-}
-.green { background: #16a34a; }
-.gold { background: #d97706; }
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>🎬 KINO BOT</h1>
-
-    <div class="card">
-        <h3>🎥 Kino kodini kiriting</h3>
-        <input id="movieCode" type="text" placeholder="Masalan: 101">
-        <button class="green" onclick="findMovie()">KINONI OLISH</button>
-        <p id="result"></p>
-    </div>
-
-    <div class="card">
-        <h3>⭐ VIP obuna</h3>
-        <p>VIP bilan majburiy obunalarsiz foydalaning.</p>
-        <button class="gold" onclick="buyVip()">VIP SOTIB OLISH</button>
-    </div>
-</div>
-
+<link rel="stylesheet" href="/static/common.css">
+</head><body>
+<h1 id="title">🎬 KINO BOT</h1>
+<div id="ann" class="card" hidden></div>
+<div id="view"></div>
+<div class="tabs" id="tabs"></div>
 <script>
-const tg = window.Telegram.WebApp;
-tg.ready();
-tg.expand();
-
-function findMovie() {
-    const code = document.getElementById("movieCode").value.trim();
-    if (!code) {
-        document.getElementById("result").textContent = "Kino kodini kiriting!";
-        return;
-    }
-    tg.sendData("/movie " + code);
-}
-
-function buyVip() {
-    tg.sendData("/buyvip");
-}
-</script>
-</body>
-</html>
+const tg=Telegram.WebApp;tg.ready();tg.expand();
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let cfg={},me={};
+function toast(t){const d=document.createElement("div");d.className="toast";d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),2800)}
+async function api(p,o={}){const r=await fetch(p,{...o,headers:{"X-Init-Data":tg.initData,"Content-Type":"application/json"}});
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||"Xatolik");return j}
+const MSG={bad_code:"❌ Kod noto'g'ri formatda",not_found:"❌ Bunday kod topilmadi",banned:"🚫 Siz bloklangansiz",
+ vip_only:"⭐ Bu kino faqat VIP uchun",error:"⚠️ Yuborib bo'lmadi. Avval botga /start bosing",maintenance:"🛠 Texnik ishlar ketmoqda"};
+async function getMovie(code){
+ try{const r=await api("/api/movie",{method:"POST",body:JSON.stringify({code})});
+  if(r.status==="ok"){toast("✅ Kino chatga yuborildi");tg.HapticFeedback?.notificationOccurred("success");return}
+  if(r.status==="not_subscribed"){$("#out").innerHTML="<b>Avval kanallarga a'zo bo'ling:</b>"+r.channels.map(c=>`<button class="w b-blue" onclick="tg.openTelegramLink('${esc(c.url)}')">📢 ${esc(c.title)}</button>`).join("")+`<button class="w b-green" onclick="getMovie('${esc(code)}')">✅ Tekshirish</button>`;return}
+  toast(r.detail||MSG[r.status]||"Xatolik")}catch(e){toast(e.message)}}
+const pages={
+ async kino(){$("#view").innerHTML=`<div class="card"><h3>🎥 Kino kodi</h3><input id="code" placeholder="Kod yoki nom, masalan: 101" enterkeyhint="search">
+  <button class="w b-green" onclick="go()">KINONI OLISH</button><div id="out" style="margin-top:10px"></div></div>`},
+ async top(){const l=await api("/api/top");$("#view").innerHTML=`<div class="card"><h3>🔥 TOP 10</h3>`+(l.map((m,i)=>`<div class="item"><span>${i+1}. ${esc(m.title)} ${m.vip_only?'<span class="badge">⭐ VIP</span>':''}<br><span class="muted">kod: ${esc(m.code)} · 👁 ${m.views}</span></span><button class="b-blue" onclick="getMovie('${esc(m.code)}')">▶️</button></div>`).join("")||"Hozircha yo'q")+"</div>"},
+ async vip(){$("#view").innerHTML=`<div class="card"><h3>⭐ VIP obuna</h3><p>• Majburiy obunasiz foydalanish<br>• VIP kinolarga kirish</p>
+  <p><b>${esc(cfg.vip_stars)} ⭐</b> / ${esc(cfg.vip_days)} kun</p><button class="w b-yellow" onclick="buy()">⭐ VIP SOTIB OLISH</button></div>`},
+ async profil(){me=await api("/api/me",{method:"POST"});$("#view").innerHTML=`<div class="card"><h3>👤 Profil</h3><p>${esc(me.name)}<br><span class="muted">ID: ${me.id}</span></p>
+  <p>${me.vip?"⭐ VIP: "+new Date(me.vip_until+"Z").toLocaleDateString()+" gacha":"VIP yo'q"}</p>
+  ${me.is_admin?'<button class="w b-black" onclick="location.href=\'/admin\'">🧩 Admin panel</button>':""}</div>`}};
+function go(){const v=$("#code").value.trim();if(!v)return toast("Kodni kiriting");getMovie(v)}
+async function buy(){try{const r=await api("/api/vip/invoice",{method:"POST"});tg.openInvoice(r.link,s=>{if(s==="paid"){toast("🎉 VIP faollashdi");pages.profil()}})}catch(e){toast(e.message)}}
+function tab(n){document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===n));pages[n]().catch(e=>toast(e.message))}
+(async()=>{
+ cfg=await fetch("/api/config").then(r=>r.json());
+ const r=document.documentElement.style;
+ [["primary","color_primary"],["green","color_green"],["yellow","color_yellow"],["black","color_black"],["bg","color_bg"],["card","color_card"]].forEach(([v,k])=>r.setProperty("--"+v,cfg[k]));
+ $("#title").textContent=cfg.bot_name;
+ if(cfg.announcement){$("#ann").hidden=false;$("#ann").innerHTML="📣 "+esc(cfg.announcement)}
+ if(cfg.maintenance==="1")toast(cfg.btn_app+": texnik ishlar");
+ const T=[["kino","🎬 Kino","b-green"],["top","🔥 "+cfg.btn_top,"b-yellow"],["vip","⭐ "+cfg.btn_vip,"b-blue"],["profil","👤 "+cfg.btn_profile,"b-black"]];
+ $("#tabs").innerHTML=T.map(([k,t,c])=>`<button class="${c}" data-t="${k}" onclick="tab('${k}')">${esc(t)}</button>`).join("");
+ try{me=await api("/api/me",{method:"POST"});tab("kino")}catch(e){$("#view").innerHTML=`<div class="card">⚠️ ${esc(e.message)}</div>`}
+})();
+</script></body></html>

@@ -1,88 +1,74 @@
-from datetime import datetime, timedelta
-
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message, LabeledPrice, PreCheckoutQuery
+from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy import select
 
-from database.db import SessionLocal, User
+from database.db import Payment, S_int, SessionLocal
+from utils.services import grant_vip
 
 router = Router()
 
-VIP_STARS = 100
-VIP_DAYS = 30
+
+def vip_payload() -> str:
+    # Narx/muddat payload ichida — sozlama o'zgarsa ham eski hisob-faktura to'g'ri ishlaydi
+    return f"vip:{S_int('vip_stars')}:{S_int('vip_days')}"
 
 
-async def send_vip_invoice(message: Message):
-    await message.answer_invoice(
-        title="VIP obuna",
-        description="30 kunlik VIP obuna",
-        payload="vip_30_days",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label="VIP 30 kun", amount=VIP_STARS)]
+def parse_payload(p: str):
+    """'vip:STARS:DAYS' -> (stars, days) yoki None"""
+    try:
+        kind, stars, days = p.split(":")
+        if kind != "vip":
+            return None
+        return int(stars), int(days)
+    except Exception:
+        return None
+
+
+async def send_vip_invoice(bot, chat_id: int):
+    stars, days = S_int("vip_stars"), S_int("vip_days")
+    await bot.send_invoice(
+        chat_id, title="⭐ VIP obuna", description=f"{days} kunlik VIP obuna",
+        payload=vip_payload(), provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=f"VIP {days} kun", amount=stars)],
     )
 
 
 @router.message(Command("buyvip"))
-async def buy_vip(message: Message):
-    await send_vip_invoice(message)
+async def buy_cmd(message: Message):
+    await send_vip_invoice(message.bot, message.chat.id)
 
 
-@router.message(F.web_app_data)
-async def webapp_vip(message: Message):
-    if message.web_app_data.data.strip() == "/buyvip":
-        await send_vip_invoice(message)
+@router.callback_query(F.data == "vip:buy")
+async def buy_cb(call: CallbackQuery):
+    await send_vip_invoice(call.bot, call.message.chat.id)
+    await call.answer()
 
 
 @router.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    if (
-        query.invoice_payload == "vip_30_days"
-        and query.currency == "XTR"
-        and query.total_amount == VIP_STARS
-    ):
-        await query.answer(ok=True)
+async def pre_checkout(q: PreCheckoutQuery):
+    p = parse_payload(q.invoice_payload)
+    if p and q.currency == "XTR" and q.total_amount == p[0]:
+        await q.answer(ok=True)
     else:
-        await query.answer(ok=False, error_message="To‘lov noto‘g‘ri.")
+        await q.answer(ok=False, error_message="To'lov ma'lumotlari noto'g'ri.")
 
 
-@router.message(lambda m: m.successful_payment is not None)
-async def successful_payment(message: Message):
-    payment = message.successful_payment
-
-    if (
-        payment.invoice_payload != "vip_30_days"
-        or payment.currency != "XTR"
-        or payment.total_amount != VIP_STARS
-    ):
-        await message.answer("To‘lov tasdiqlanmadi.")
-        return
-
-    async with SessionLocal() as session:
-        result = await session.execute(
-            select(User).where(User.id == message.from_user.id)
-        )
-        user = result.scalar_one_or_none()
-
-        if not user:
-            user = User(
-                id=message.from_user.id,
-                username=message.from_user.username,
-                full_name=message.from_user.full_name
-            )
-            session.add(user)
-            await session.flush()
-
-        now = datetime.utcnow()
-        start = (
-            user.vip_until
-            if user.is_vip and user.vip_until and user.vip_until > now
-            else now
-        )
-
-        user.is_vip = True
-        user.vip_until = start + timedelta(days=VIP_DAYS)
-        await session.commit()
-
-    await message.answer("⭐ VIP obunangiz 30 kunga faollashtirildi!")
+@router.message(F.successful_payment)
+async def paid(message: Message):
+    pay = message.successful_payment
+    p = parse_payload(pay.invoice_payload)
+    if not p or pay.currency != "XTR" or pay.total_amount != p[0]:
+        return await message.answer("To'lov tasdiqlanmadi. Admin bilan bog'laning.")
+    stars, days = p
+    async with SessionLocal() as s:
+        exists = await s.scalar(select(Payment.id).where(Payment.charge_id == pay.telegram_payment_charge_id))
+        if exists:  # takroriy xabardan himoya
+            return
+        s.add(Payment(user_id=message.from_user.id, stars=stars, days=days,
+                      charge_id=pay.telegram_payment_charge_id))
+        await s.commit()
+    from utils.services import touch_user
+    await touch_user(message.from_user)
+    await grant_vip(message.from_user.id, days)
+    await message.answer(f"⭐ VIP obunangiz {days} kunga faollashtirildi! Rahmat 🎉")
