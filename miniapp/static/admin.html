@@ -16,7 +16,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 function toast(t){const d=document.createElement("div");d.className="toast";d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),2800)}
 async function api(p,method="GET",body){const o={method,headers:{"X-Init-Data":tg.initData}};
  if(body instanceof FormData)o.body=body;else if(body){o.body=JSON.stringify(body);o.headers["Content-Type"]="application/json"}
- const r=await fetch(p,o);if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.detail||"Xatolik")}return r}
+ const r=await fetch(p,o);if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error((typeof j.detail==="string"&&j.detail)||"Server xatosi ("+r.status+")")}return r}
 const J=(...a)=>api(...a).then(r=>r.json());
 const act=async(f,ok)=>{try{await f();if(ok)toast(ok);return true}catch(e){toast("❌ "+e.message);return false}};
 const V=h=>$("#view").innerHTML=h;

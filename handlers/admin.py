@@ -175,8 +175,11 @@ PAGE = 8
 
 
 @router.callback_query(F.data.startswith("adm:movies:"))
-async def movies_list(call: CallbackQuery):
-    page = int(call.data.split(":")[2])
+async def movies_list_cb(call: CallbackQuery):
+    await render_movies(call, int(call.data.split(":")[2]))
+
+
+async def render_movies(call: CallbackQuery, page: int):
     async with SessionLocal() as s:
         total = await s.scalar(select(func.count(Movie.id)))
         items = (await s.execute(select(Movie).order_by(Movie.id.desc()).offset(page * PAGE).limit(PAGE))).scalars().all()
@@ -201,8 +204,7 @@ async def movie_del(call: CallbackQuery):
         if m:
             await s.delete(m)
             await s.commit()
-    call.data = f"adm:movies:{page}"
-    await movies_list(call)
+    await render_movies(call, int(page))
 
 
 @router.callback_query(F.data.startswith("adm:mvip:"))
@@ -213,8 +215,7 @@ async def movie_vip(call: CallbackQuery):
         if m:
             m.vip_only = not m.vip_only
             await s.commit()
-    call.data = f"adm:movies:{page}"
-    await movies_list(call)
+    await render_movies(call, int(page))
 
 
 # ------------------------------ Foydalanuvchilar ------------------------------

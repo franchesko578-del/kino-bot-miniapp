@@ -16,7 +16,7 @@ const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&
 let cfg={},me={};
 function toast(t){const d=document.createElement("div");d.className="toast";d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),2800)}
 async function api(p,o={}){const r=await fetch(p,{...o,headers:{"X-Init-Data":tg.initData,"Content-Type":"application/json"}});
- const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.detail||"Xatolik");return j}
+ const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error((typeof j.detail==="string"&&j.detail)||"Server xatosi ("+r.status+")");return j}
 const MSG={bad_code:"❌ Kod noto'g'ri formatda",not_found:"❌ Bunday kod topilmadi",banned:"🚫 Siz bloklangansiz",
  vip_only:"⭐ Bu kino faqat VIP uchun",error:"⚠️ Yuborib bo'lmadi. Avval botga /start bosing",maintenance:"🛠 Texnik ishlar ketmoqda"};
 async function getMovie(code){
@@ -45,6 +45,6 @@ function tab(n){document.querySelectorAll("#tabs button").forEach(b=>b.classList
  if(cfg.maintenance==="1")toast(cfg.btn_app+": texnik ishlar");
  const T=[["kino","🎬 Kino","b-green"],["top","🔥 "+cfg.btn_top,"b-yellow"],["vip","⭐ "+cfg.btn_vip,"b-blue"],["profil","👤 "+cfg.btn_profile,"b-black"]];
  $("#tabs").innerHTML=T.map(([k,t,c])=>`<button class="${c}" data-t="${k}" onclick="tab('${k}')">${esc(t)}</button>`).join("");
- try{me=await api("/api/me",{method:"POST"});tab("kino")}catch(e){$("#view").innerHTML=`<div class="card">⚠️ ${esc(e.message)}</div>`}
+ try{me=await api("/api/me",{method:"POST"});tab("kino")}catch(e){$("#view").innerHTML=`<div class="card">⚠️ ${esc(e.message)}<button class="w b-blue" onclick="location.reload()">🔄 Qayta urinish</button></div>`}
 })();
 </script></body></html>

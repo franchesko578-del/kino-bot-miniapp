@@ -2,17 +2,20 @@ import html
 from datetime import datetime
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 
 from config import ADMIN_IDS, WEBAPP_URL
-from database.db import S, SessionLocal, User
+from database.db import Movie, S, SessionLocal, User
 from utils.keyboards import B, kb, webapp_btn
 from utils.services import (
     deliver_movie, status_text, subs_markup, top_movies, touch_user, vip_active,
 )
 
 router = Router()
+BACK = [B("◀️ Orqaga", "black", callback_data="menu:home")]
 
 
 def main_menu(user_id: int):
@@ -20,14 +23,31 @@ def main_menu(user_id: int):
     if WEBAPP_URL:
         rows.append([webapp_btn("🎬 " + S("btn_app"), WEBAPP_URL, "blue")])
     rows.append([B(S("btn_top"), "yellow", callback_data="menu:top"),
-                 B(S("btn_vip"), "green", callback_data="menu:vip")])
-    rows.append([B(S("btn_profile"), "black", callback_data="menu:profile")])
+                 B(S("btn_new"), "blue", callback_data="menu:new")])
+    rows.append([B(S("btn_vip"), "green", callback_data="vip:buy"),
+                 B(S("btn_profile"), "black", callback_data="menu:profile")])
     if user_id in ADMIN_IDS:
         rows.append([B("🛠 Admin panel", "red", callback_data="adm:home")])
     return kb(*rows)
 
 
-async def send_result(bot, message: Message, res: dict, code: str = ""):
+def welcome_text() -> str:
+    text = f"<b>{html.escape(S('bot_name'))}</b>\n\n{S('welcome_text')}"
+    if S("announcement"):
+        text += f"\n\n📣 {S('announcement')}"
+    return text
+
+
+async def show(call: CallbackQuery, text: str, markup):
+    """Xabarni joyida yangilaydi (chat to'lib ketmasin). Video xabar bo'lsa — yangisini yuboradi."""
+    try:
+        await call.message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest:
+        await call.message.answer(text, reply_markup=markup)
+    await call.answer()
+
+
+async def send_result(bot, message: Message, res: dict):
     """deliver_movie natijasini foydalanuvchiga ko'rsatadi."""
     st = res["status"]
     if st == "ok":
@@ -38,7 +58,7 @@ async def send_result(bot, message: Message, res: dict, code: str = ""):
             reply_markup=subs_markup(res["channels"], res["code"]),
         )
     elif st == "vip_only":
-        await message.answer(status_text(res), reply_markup=kb([B("⭐ VIP olish", "green", callback_data="menu:vip")]))
+        await message.answer(status_text(res), reply_markup=kb([B("⭐ VIP olish", "green", callback_data="vip:buy")]))
     else:
         await message.answer(res.get("detail") or status_text(res))
 
@@ -50,11 +70,7 @@ async def start(message: Message, command: CommandObject):
     if arg.startswith("m_"):  # ulashilgan havola: /start m_KOD
         res = await deliver_movie(message.bot, message.chat.id, message.from_user.id, arg[2:])
         return await send_result(message.bot, message, res)
-    text = f"<b>{html.escape(S('bot_name'))}</b>\n\n{S('welcome_text')}"
-    if S("announcement"):
-        text += f"\n\n📣 {S('announcement')}"
-    text += f"\n\n🆔 ID: <code>{message.from_user.id}</code>"
-    await message.answer(text, reply_markup=main_menu(message.from_user.id))
+    await message.answer(welcome_text(), reply_markup=main_menu(message.from_user.id))
 
 
 @router.message(Command("id"))
@@ -62,29 +78,57 @@ async def my_id(message: Message):
     await message.answer(f"Telegram ID: <code>{message.from_user.id}</code>")
 
 
-async def top_text() -> str:
-    movies = await top_movies(10)
+@router.message(Command("admin"))
+async def not_admin(message: Message):
+    # admin.router oldin ishlaydi; bu yerga faqat admin bo'lmaganlar tushadi
+    await message.answer(
+        f"🚫 Siz admin emassiz.\nSizning ID: <code>{message.from_user.id}</code>\n"
+        "Egasi bu ID ni Render → Environment → ADMIN_IDS ga qo'shsa, panel ochiladi."
+    )
+
+
+# ---------------- TOP 10 / Yangi kinolar ----------------
+def movies_text_markup(title: str, movies):
     if not movies:
-        return "Hozircha kinolar yo'q."
-    lines = [f"{i}. <b>{html.escape(m.title)}</b> — <code>{html.escape(m.code)}</code> · 👁 {m.views or 0}"
+        return f"{title}\n\nHozircha kinolar yo'q.", kb(BACK)
+    lines = [f"{i}. <b>{html.escape(m.title)}</b> · <code>{html.escape(m.code)}</code> · 👁 {m.views or 0}"
              for i, m in enumerate(movies, 1)]
-    return "🔥 <b>TOP 10</b>\n\n" + "\n".join(lines) + "\n\nKodni yuboring — kino keladi."
+    rows = [[B(f"▶️ {i}. {m.title}"[:40], "blue" if i % 2 else "green", callback_data=f"mv:{m.code}")]
+            for i, m in enumerate(movies, 1)]
+    return f"{title}\n\n" + "\n".join(lines) + "\n\nKinoni olish uchun tugmani bosing yoki kodni yuboring.", kb(*rows, BACK)
 
 
+async def new_movies(limit: int = 10):
+    async with SessionLocal() as s:
+        return (await s.execute(select(Movie).order_by(Movie.id.desc()).limit(limit))).scalars().all()
+
+
+@router.message(Command("top"))
+async def top_cmd(message: Message):
+    text, markup = movies_text_markup("🔥 <b>TOP 10</b>", await top_movies(10))
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(F.data == "menu:top")
+async def cb_top(call: CallbackQuery):
+    await show(call, *movies_text_markup("🔥 <b>TOP 10</b>", await top_movies(10)))
+
+
+@router.callback_query(F.data == "menu:new")
+async def cb_new(call: CallbackQuery):
+    await show(call, *movies_text_markup("🆕 <b>Yangi kinolar</b>", await new_movies(10)))
+
+
+# ---------------- Profil ----------------
 async def profile_text(user_id: int) -> str:
     async with SessionLocal() as s:
         u = await s.get(User, user_id)
     if vip_active(u):
         left = (u.vip_until - datetime.utcnow()).days
-        vip = f"⭐ VIP faol — {u.vip_until:%d.%m.%Y} gacha ({left} kun)"
+        vip = f"⭐ VIP faol — {u.vip_until:%d.%m.%Y} gacha ({left} kun qoldi)"
     else:
         vip = "VIP yo'q"
     return f"👤 <b>Profil</b>\n🆔 <code>{user_id}</code>\n{vip}"
-
-
-@router.message(Command("top"))
-async def top_cmd(message: Message):
-    await message.answer(await top_text())
 
 
 @router.message(Command("vipinfo"))
@@ -92,35 +136,24 @@ async def vipinfo(message: Message):
     await message.answer(await profile_text(message.from_user.id))
 
 
-@router.callback_query(F.data == "menu:top")
-async def cb_top(call: CallbackQuery):
-    await call.message.answer(await top_text())
-    await call.answer()
-
-
 @router.callback_query(F.data == "menu:profile")
 async def cb_profile(call: CallbackQuery):
-    await call.message.answer(await profile_text(call.from_user.id))
-    await call.answer()
+    await show(call, await profile_text(call.from_user.id), kb(BACK))
 
 
-@router.callback_query(F.data == "menu:vip")
-async def cb_vip(call: CallbackQuery):
-    stars, days = S("vip_stars"), S("vip_days")
-    await call.message.answer(
-        f"⭐ <b>VIP obuna</b>\n\n• Majburiy obunasiz foydalanish\n• VIP kinolarga kirish\n\n"
-        f"💰 Narxi: {stars} ⭐ / {days} kun",
-        reply_markup=kb([B(f"⭐ {stars} Stars — sotib olish", "green", callback_data="vip:buy")]),
-    )
-    await call.answer()
+@router.callback_query(F.data == "menu:home")
+async def cb_home(call: CallbackQuery):
+    await show(call, welcome_text(), main_menu(call.from_user.id))
 
 
-@router.callback_query(F.data.startswith("chk:"))
-async def cb_check(call: CallbackQuery):
-    res = await deliver_movie(call.bot, call.message.chat.id, call.from_user.id, call.data[4:])
+# ---------------- Kino olish tugmalari ----------------
+@router.callback_query(F.data.startswith("chk:") | F.data.startswith("mv:"))
+async def cb_movie(call: CallbackQuery):
+    code = call.data.split(":", 1)[1]
+    res = await deliver_movie(call.bot, call.message.chat.id, call.from_user.id, code)
     if res["status"] == "ok":
         await call.answer("✅ Kino yuborildi")
-    elif res["status"] == "not_subscribed":
+    elif res["status"] == "not_subscribed" and call.data.startswith("chk:"):
         await call.answer("❌ Hali hamma kanalga a'zo emassiz", show_alert=True)
     else:
         await call.answer()

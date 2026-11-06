@@ -14,7 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BufferedInputFile, LabeledPrice
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
@@ -70,6 +70,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KINO BOT Mini App", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.exception_handler(Exception)
+async def on_error(request, exc):
+    log.exception("API xatosi: %s", request.url.path)
+    return JSONResponse({"detail": f"Server xatosi: {type(exc).__name__}"}, status_code=500)
 
 
 # ---------------------- Telegram initData tekshiruvi ----------------------

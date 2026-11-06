@@ -28,18 +28,22 @@ def vip_active(u: User | None) -> bool:
     return bool(u and u.is_vip and u.vip_until and u.vip_until > datetime.utcnow())
 
 
+def _norm_user(t):
+    """aiogram User yoki Mini App'dan kelgan dict -> (id, username, to'liq ism)"""
+    if isinstance(t, dict):
+        return t["id"], t.get("username"), " ".join(filter(None, [t.get("first_name"), t.get("last_name")]))
+    return t.id, t.username, t.full_name
+
+
 async def touch_user(tg_user) -> User:
     """Foydalanuvchini bazaga yozadi/yangilaydi."""
+    uid, username, full_name = _norm_user(tg_user)
     async with SessionLocal() as s:
-        u = await s.get(User, tg_user.id)
+        u = await s.get(User, uid)
         if not u:
-            u = User(id=tg_user.id)
+            u = User(id=uid)
             s.add(u)
-        u.username = tg_user.username if hasattr(tg_user, "username") else tg_user.get("username")
-        u.full_name = (
-            tg_user.full_name if hasattr(tg_user, "full_name")
-            else " ".join(filter(None, [tg_user.get("first_name"), tg_user.get("last_name")]))
-        )
+        u.username, u.full_name = username, full_name
         u.last_seen = datetime.utcnow()
         u.blocked = False
         if u.vip_until and u.vip_until <= datetime.utcnow():
@@ -87,7 +91,7 @@ async def movie_markup(bot: Bot, code: str):
     rows = []
     if WEBAPP_URL:
         rows.append([webapp_btn("🎬 " + S("btn_app"), WEBAPP_URL, "blue")])
-    rows.append([B(S("btn_vip"), "green", callback_data="menu:vip"),
+    rows.append([B(S("btn_vip"), "green", callback_data="vip:buy"),
                  B(S("btn_top"), "yellow", callback_data="menu:top")])
     rows.append([B(S("btn_share"), "black", url=share)])
     return kb(*rows)

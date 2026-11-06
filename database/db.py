@@ -75,6 +75,7 @@ SETTINGS = {
     "vip_days": ("30", "VIP muddati (kun)", "int"),
     "btn_app": ("Mini App", "Tugma matni: Mini App", "text"),
     "btn_top": ("TOP 10", "Tugma matni: TOP 10", "text"),
+    "btn_new": ("Yangi kinolar", "Tugma matni: Yangi kinolar", "text"),
     "btn_vip": ("VIP", "Tugma matni: VIP", "text"),
     "btn_profile": ("Profil", "Tugma matni: Profil", "text"),
     "btn_share": ("Ulashish", "Tugma matni: Ulashish", "text"),
