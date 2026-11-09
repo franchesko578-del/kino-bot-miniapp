@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, DateTime, Integer, String, Text,
+    BigInteger, Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint,
     func, inspect, select,
 )
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -28,6 +28,7 @@ class User(Base):
     blocked = Column(Boolean, default=False)   # foydalanuvchi botni bloklagan
     created_at = Column(DateTime, server_default=func.now())
     last_seen = Column(DateTime, nullable=True)
+    referred_by = Column(BigInteger, nullable=True)  # kim taklif qilgan
 
 
 class Movie(Base):
@@ -39,6 +40,23 @@ class Movie(Base):
     views = Column(Integer, default=0)
     vip_only = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class MoviePart(Base):
+    """Serial/ko'p qismli kino. 1-qism Movie.file_id da, 2 va undan keyingilari shu yerda."""
+    __tablename__ = "movie_parts"
+    __table_args__ = (UniqueConstraint("movie_id", "number"),)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    movie_id = Column(Integer, nullable=False, index=True)
+    number = Column(Integer, nullable=False)
+    file_id = Column(String(255), nullable=False)
+
+
+class Admin(Base):
+    __tablename__ = "admins"
+    id = Column(BigInteger, primary_key=True)
+    added_by = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class SubscriptionChannel(Base):
@@ -76,6 +94,11 @@ SETTINGS = {
     "btn_app": ("Mini App", "Tugma matni: Mini App", "text"),
     "btn_top": ("TOP 10", "Tugma matni: TOP 10", "text"),
     "btn_new": ("Yangi kinolar", "Tugma matni: Yangi kinolar", "text"),
+    "btn_ref": ("Do'st taklif qilish", "Tugma matni: Do'st taklif qilish", "text"),
+    "ref_bonus_days": ("3", "Do'st taklifi: har bir do'st uchun bonus VIP kun (0 = o'chiq)", "int0"),
+    "ref_limit": ("20", "Do'st taklifi: bitta odam olishi mumkin bo'lgan maksimal mukofot soni", "int"),
+    "autopost": ("1", "Yangi kino kanalga avtomatik e'lon qilinsin (1 yoqilgan / 0 o'chirilgan)", "bool"),
+    "post_channel": ("", "E'lon kanali (@kanal yoki -100...; bo'sh = o'chiq). Bot kanalda admin bo'lsin", "chan"),
     "btn_vip": ("VIP", "Tugma matni: VIP", "text"),
     "btn_profile": ("Profil", "Tugma matni: Profil", "text"),
     "btn_share": ("Ulashish", "Tugma matni: Ulashish", "text"),
@@ -112,19 +135,24 @@ def S_on(key: str) -> bool:
 
 def validate_setting(key: str, value: str) -> str:
     """Noto'g'ri bo'lsa ValueError ko'taradi."""
+    import re
     if key not in SETTINGS:
         raise ValueError("Noma'lum sozlama")
     kind = SETTINGS[key][2]
     value = value.strip()
-    if kind == "int":
-        if not value.isdigit() or not (1 <= int(value) <= 100000):
-            raise ValueError("1 dan 100000 gacha son kiriting")
+    if kind in ("int", "int0"):
+        low = 0 if kind == "int0" else 1
+        if not value.isdigit() or not (low <= int(value) <= 100000):
+            raise ValueError(f"{low} dan 100000 gacha son kiriting")
     elif kind == "bool" and value not in ("0", "1"):
         raise ValueError("Faqat 0 yoki 1")
-    elif kind == "color":
-        import re
-        if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
-            raise ValueError("Rang #RRGGBB ko'rinishida bo'lsin, masalan #2f80ed")
+    elif kind == "color" and not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        raise ValueError("Rang #RRGGBB ko'rinishida bo'lsin, masalan #2f80ed")
+    elif kind == "chan":
+        if value in ("-", "0"):  # o'chirish
+            return ""
+        if not re.fullmatch(r"(@[A-Za-z0-9_]{4,}|-?\d{6,})", value):
+            raise ValueError("@kanal_nomi yoki -100... ID kiriting (tozalash uchun: -)")
     elif len(value) > 3000:
         raise ValueError("Matn juda uzun")
     return value

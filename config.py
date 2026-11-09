@@ -5,11 +5,14 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-ADMIN_IDS = {
+# Egalar (Render'dagi ADMIN_IDS): adminlarni qo'shish/o'chirish huquqi faqat ularda.
+OWNER_IDS = frozenset(
     int(x.strip())
     for x in os.getenv("ADMIN_IDS", "").split(",")
     if x.strip().isdigit()
-}
+)
+# Barcha adminlar (egalar + panel orqali qo'shilganlar). Bazadan init_db() to'ldiradi.
+ADMIN_IDS = set(OWNER_IDS)
 
 
 def _db_url(url: str) -> str:

@@ -1,5 +1,6 @@
 import html
 from datetime import datetime
+from urllib.parse import quote
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -8,10 +9,11 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
 from config import ADMIN_IDS, WEBAPP_URL
-from database.db import Movie, S, SessionLocal, User
+from database.db import Movie, S, S_int, SessionLocal, User
 from utils.keyboards import B, kb, webapp_btn
 from utils.services import (
-    deliver_movie, status_text, subs_markup, top_movies, touch_user, vip_active,
+    deliver_movie, handle_referral, ref_count, ref_link, status_text, subs_markup, top_movies,
+    touch_user, vip_active,
 )
 
 router = Router()
@@ -26,6 +28,8 @@ def main_menu(user_id: int):
                  B(S("btn_new"), "blue", callback_data="menu:new")])
     rows.append([B(S("btn_vip"), "green", callback_data="vip:buy"),
                  B(S("btn_profile"), "black", callback_data="menu:profile")])
+    if S_int("ref_bonus_days") > 0:
+        rows.append([B("🎁 " + S("btn_ref"), "yellow", callback_data="menu:ref")])
     if user_id in ADMIN_IDS:
         rows.append([B("🛠 Admin panel", "red", callback_data="adm:home")])
     return kb(*rows)
@@ -65,8 +69,13 @@ async def send_result(bot, message: Message, res: dict):
 
 @router.message(CommandStart())
 async def start(message: Message, command: CommandObject):
-    await touch_user(message.from_user)
+    _, created = await touch_user(message.from_user, return_created=True)
     arg = command.args or ""
+    if arg.startswith("r_") and arg[2:].isdigit() and created:  # faqat yangi foydalanuvchi hisoblanadi
+        await handle_referral(message.bot, message.from_user.id, int(arg[2:]))
+    if arg == "top":
+        text, markup = movies_text_markup("🔥 <b>TOP 10</b>", await top_movies(10))
+        return await message.answer(text, reply_markup=markup)
     if arg.startswith("m_"):  # ulashilgan havola: /start m_KOD
         res = await deliver_movie(message.bot, message.chat.id, message.from_user.id, arg[2:])
         return await send_result(message.bot, message, res)
@@ -158,3 +167,26 @@ async def cb_movie(call: CallbackQuery):
     else:
         await call.answer()
         await send_result(call.bot, call.message, res)
+
+
+@router.callback_query(F.data.startswith("pt:"))
+async def cb_part(call: CallbackQuery):
+    code, _, num = call.data[3:].rpartition(":")
+    if not num.isdigit():
+        return await call.answer()
+    res = await deliver_movie(call.bot, call.message.chat.id, call.from_user.id, code, part=int(num))
+    if res["status"] == "ok":
+        await call.answer(f"📺 {num}-qism")
+    else:
+        await call.answer()
+        await send_result(call.bot, call.message, res)
+
+
+@router.callback_query(F.data == "menu:ref")
+async def cb_ref(call: CallbackQuery):
+    link = await ref_link(call.bot, call.from_user.id)
+    n = await ref_count(call.from_user.id)
+    text = (f"🎁 <b>Do'st taklif qilish</b>\n\nHar bir yangi do'stingiz uchun <b>+{S('ref_bonus_days')} kun VIP</b> olasiz.\n"
+            f"👥 Taklif qilganlaringiz: <b>{n}</b>\n\n🔗 Sizning havolangiz:\n<code>{link}</code>")
+    share = f"https://t.me/share/url?url={quote(link)}&text={quote('🎬 Kinolar boti — kodni yuboring, kino keladi!')}"
+    await show(call, text, kb([B("📤 Do'stlarga yuborish", "green", url=share)], BACK))

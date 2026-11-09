@@ -22,13 +22,15 @@ const act=async(f,ok)=>{try{await f();if(ok)toast(ok);return true}catch(e){toast
 const V=h=>$("#view").innerHTML=h;
 const P={
 async "📊 Statistika"(){const s=await J("/api/admin/stats");
- V(`<div class="card">👥 Foydalanuvchi: <b>${s.users}</b> (bugun +${s.new_today})<br>⭐ Faol VIP: <b>${s.vip}</b> · 🚫 Ban: ${s.banned}<br>🎬 Kinolar: <b>${s.movies}</b> · 👁 ${s.views}<br>📢 Kanallar: ${s.channels}<br>💳 To'lovlar: ${s.payments} ta · <b>${s.stars} ⭐</b></div>`)},
+ V(`<div class="card">👥 Foydalanuvchi: <b>${s.users}</b> (bugun +${s.new_today})<br>⭐ Faol VIP: <b>${s.vip}</b> · 🚫 Ban: ${s.banned}<br>🎬 Kinolar: <b>${s.movies}</b> · 👁 ${s.views}<br>📢 Kanallar: ${s.channels}<br>💳 To'lovlar: ${s.payments} ta · <b>${s.stars} ⭐</b></div><div class="card"><b>📈 Kunlik yangi foydalanuvchilar</b><div id="ch" class="muted">…</div></div>`);
+ const c=await J("/api/admin/chart?days=14"),mx=Math.max(1,...c.map(x=>x.n));
+ $("#ch").innerHTML=`<div style="display:flex;align-items:flex-end;gap:4px;height:130px;margin-top:10px">${c.map(x=>`<div style="flex:1;text-align:center;font-size:10px"><div style="height:${x.n?Math.max(6,x.n/mx*100):2}px;background:var(--primary);border-radius:4px 4px 0 0"></div>${x.n}</div>`).join("")}</div><div style="display:flex;gap:4px;font-size:9px;color:#94a3b8">${c.map(x=>`<div style="flex:1;text-align:center">${x.d.slice(0,2)}</div>`).join("")}</div>`},
 async "🎬 Kinolar"(){const l=await J("/api/admin/movies?q="+encodeURIComponent(window.mq||""));
- V(`<div class="card"><h3>➕ Kino qo'shish</h3><input id="mc" placeholder="Kod"><input id="mt" placeholder="Nomi"><input id="mf" type="file" accept="video/*">
+ V(`<div class="card"><h3>➕ Kino qo'shish</h3><input id="mc" placeholder="Kod"><input id="mt" placeholder="Nomi (qism qo'shishda shart emas)"><input id="mp" type="number" min="1" value="1" placeholder="Qism raqami (1 = yangi kino)"><input id="mf" type="file" accept="video/*">
  <label class="muted"><input type="checkbox" id="mv" style="width:auto"> Faqat VIP uchun</label><button class="w b-green" onclick="addMovie()">Yuklash (≤50 MB)</button>
  <p class="muted">Katta video: botga «KOD | NOM» izohi bilan yuboring.</p></div>
  <input id="mqi" placeholder="🔎 Qidirish" value="${esc(window.mq||"")}" onchange="window.mq=this.value;tab('🎬 Kinolar')">
- <div class="card">${l.map(m=>`<div class="item"><span><b>${esc(m.title)}</b> ${m.vip_only?"⭐":""}<br><span class="muted">${esc(m.code)} · 👁 ${m.views}</span></span>
+ <div class="card">${l.map(m=>`<div class="item"><span><b>${esc(m.title)}</b> ${m.vip_only?"⭐":""}<br><span class="muted">${esc(m.code)} · 👁 ${m.views}${m.parts>1?" · 📺 "+m.parts+" qism":""}</span></span>
  <span class="row"><button class="sm b-yellow" onclick="editMovie(${m.id},'${esc(m.code)}','${esc(m.title).replace(/'/g,"")}')">✏️</button>
  <button class="sm b-black" onclick="mv(${m.id},${!m.vip_only})">${m.vip_only?"Ochiq":"VIP"}</button><button class="sm b-red" onclick="delMovie(${m.id})">🗑</button></span></div>`).join("")||"Bo'sh"}</div>`)},
 async "👥 Userlar"(){const l=await J("/api/admin/users?q="+encodeURIComponent(window.uq||""));
@@ -44,15 +46,18 @@ async "📣 Reklama"(){V(`<div class="card"><textarea id="bt" rows="5" placehold
 async "⚙️ Sozlamalar"(){const l=await J("/api/admin/settings");
  V(l.map(s=>`<div class="card"><b>${esc(s.label)}</b>${s.kind==="text"?`<textarea rows="2" id="s_${s.key}">${esc(s.value)}</textarea>`:`<input id="s_${s.key}" value="${esc(s.value)}" ${s.kind==="color"?'type="color" style="height:46px"':""}>`}
  <button class="w b-blue" onclick="saveS('${s.key}')">Saqlash</button></div>`).join(""))},
+async "👮 Adminlar"(){const l=await J("/api/admin/admins"),own=l.pop().viewer_is_owner;
+ V((own?`<div class="card"><input id="ai" placeholder="ID yoki @username"><button class="w b-green" onclick="addAdm()">➕ Admin qo'shish</button></div>`:`<p class="muted">Qo'shish/o'chirish faqat bot egasiga ruxsat.</p>`)+
+ `<div class="card">${l.map(a=>`<div class="item"><span>${a.owner?"🔒":"👮"} ${a.id}</span>${own&&!a.owner?`<button class="sm b-red" onclick="delAdm(${a.id})">🗑</button>`:""}</div>`).join("")}</div>`)},
 async "💾 Zaxira"(){V(`<div class="card"><p>Barcha ma'lumotlar JSON fayl sifatida. Bot ham har 24 soatda avtomatik yuboradi.</p><button class="w b-black" onclick="dl()">⬇️ Yuklab olish</button></div>`)}};
 function tab(n){document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.t===n));
  P[n]().catch(e=>V(`<div class="card">⚠️ ${esc(e.message)}</div>`))}
 const C=["b-blue","b-green","b-yellow","b-black"];
 $("#nav").innerHTML=Object.keys(P).map((k,i)=>`<button class="sm ${C[i%4]}" data-t="${k}" onclick="tab(this.dataset.t)">${k}</button>`).join("");
 const cur=()=>document.querySelector("#nav .on").dataset.t;
-async function addMovie(){const f=$("#mf").files[0];if(!f||!$("#mc").value||!$("#mt").value)return toast("Kod, nom va video kerak");
- const fd=new FormData();fd.append("code",$("#mc").value);fd.append("title",$("#mt").value);fd.append("vip_only",$("#mv").checked);fd.append("file",f);
- toast("Yuklanmoqda…");if(await act(()=>api("/api/admin/movies","POST",fd),"✅ Qo'shildi"))tab(cur())}
+async function addMovie(){const f=$("#mf").files[0],p=+$("#mp").value||1;if(!f||!$("#mc").value||(p===1&&!$("#mt").value))return toast("Kod, video (va 1-qism uchun nom) kerak");
+ const fd=new FormData();fd.append("code",$("#mc").value);fd.append("title",$("#mt").value);fd.append("part",p);fd.append("vip_only",$("#mv").checked);fd.append("file",f);
+ toast("Yuklanmoqda…");let info="";if(await act(async()=>{const j=await (await api("/api/admin/movies","POST",fd)).json();info=j.info||""},"")){toast("✅ "+(info||"Qo'shildi"));tab(cur())}}
 async function editMovie(id,code,title){const t=prompt("Yangi nom:",title);if(t===null)return;const c=prompt("Yangi kod:",code);if(c===null)return;
  if(await act(()=>api("/api/admin/movies/"+id,"PUT",{title:t,code:c}),"✅"))tab(cur())}
 async function mv(id,v){if(await act(()=>api("/api/admin/movies/"+id,"PUT",{vip_only:v}),"✅"))tab(cur())}
@@ -64,6 +69,8 @@ async function delCh(id){if(confirm("O'chirilsinmi?")&&await act(()=>api("/api/a
 async function sendBc(){if(!confirm("Hammaga yuborilsinmi?"))return;if(await act(()=>api("/api/admin/broadcast","POST",{text:$("#bt").value,buttons:$("#bb").value}),"🚀 Boshlandi"))pollBc()}
 async function pollBc(){const el=$("#bs");if(!el)return;const s=await J("/api/admin/broadcast");
  el.textContent=s.total?`${s.running?"⏳ Yuborilmoqda":"✅ Oxirgi"}: ${s.sent}/${s.total} · bloklagan ${s.blocked} · xato ${s.failed}`:"";if(s.running)setTimeout(pollBc,2000)}
+async function addAdm(){if(await act(()=>api("/api/admin/admins","POST",{ref:$("#ai").value}),"✅ Qo'shildi"))tab(cur())}
+async function delAdm(id){if(confirm("Adminlikdan olinsinmi?")&&await act(()=>api("/api/admin/admins/"+id,"DELETE"),"🗑"))tab(cur())}
 async function saveS(k){await act(()=>api("/api/admin/settings","PUT",{key:k,value:$("#s_"+k).value}),"✅ Saqlandi")}
 async function dl(){const b=await (await api("/api/admin/backup")).blob();const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="backup.json";a.click()}
 tab("📊 Statistika");

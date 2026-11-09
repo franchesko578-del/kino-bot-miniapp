@@ -19,16 +19,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
-from config import ADMIN_IDS, BOT_TOKEN
+from config import ADMIN_IDS, BOT_TOKEN, OWNER_IDS
 from database.db import (
-    SETTINGS, S, S_int, Movie, Payment, SessionLocal, SubscriptionChannel, User,
+    SETTINGS, S, S_int, Movie, MoviePart, Payment, SessionLocal, SubscriptionChannel, User,
     init_db, set_setting,
 )
 from handlers import admin, movies, payments, user
 from utils.keyboards import parse_buttons
 from utils.services import (
-    CODE_RE, BROADCAST, backup_bytes, broadcast, deliver_movie, grant_vip,
-    remove_vip, send_backup, stats, top_movies, touch_user, vip_active,
+    CODE_RE, BROADCAST, add_admin, add_part, autopost, backup_bytes, broadcast, chart_text,
+    daily_users, deliver_movie, delete_movie, grant_vip, load_admins, part_counts, ref_count,
+    ref_link, remove_admin, remove_vip, send_backup, stats, top_movies, touch_user, vip_active,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN topilmadi! Render > Environment ga qo'shing.")
     await init_db()
+    await load_admins()
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await bot.delete_webhook(drop_pending_updates=False)
     tasks = [asyncio.create_task(dp.start_polling(bot, handle_signals=False)),
@@ -102,6 +104,12 @@ async def current_user(x_init_data: str = Header(default="")) -> dict:
     return u
 
 
+async def owner_user(u: dict = Depends(current_user)) -> dict:
+    if u["id"] not in OWNER_IDS:
+        raise HTTPException(403, "Faqat bot egasi uchun")
+    return u
+
+
 async def admin_user(u: dict = Depends(current_user)) -> dict:
     if u["id"] not in ADMIN_IDS:
         raise HTTPException(403, "Faqat adminlar uchun")
@@ -135,8 +143,10 @@ async def public_config():
 
 
 # ---------------------- Foydalanuvchi API ----------------------
-def movie_json(m: Movie):
-    return {"code": m.code, "title": m.title, "views": m.views or 0, "vip_only": bool(m.vip_only)}
+async def movies_json(ms):
+    pc = await part_counts([m.id for m in ms])
+    return [{"id": m.id, "code": m.code, "title": m.title, "views": m.views or 0,
+             "vip_only": bool(m.vip_only), "parts": pc.get(m.id, 1)} for m in ms]
 
 
 @app.post("/api/me")
@@ -144,16 +154,18 @@ async def me(u: dict = Depends(current_user)):
     row = await touch_user(u)
     return {"id": row.id, "name": row.full_name, "vip": vip_active(row),
             "vip_until": row.vip_until.isoformat() if vip_active(row) else None,
-            "is_admin": row.id in ADMIN_IDS}
+            "is_admin": row.id in ADMIN_IDS, "ref_link": await ref_link(bot, row.id),
+            "ref_count": await ref_count(row.id), "ref_bonus": S_int("ref_bonus_days")}
 
 
 class CodeIn(BaseModel):
     code: str
+    part: int = 1
 
 
 @app.post("/api/movie")
 async def get_movie(body: CodeIn, u: dict = Depends(current_user)):
-    res = await deliver_movie(bot, u["id"], u["id"], body.code)
+    res = await deliver_movie(bot, u["id"], u["id"], body.code, body.part)
     if res["status"] == "not_subscribed":
         res["channels"] = [{"title": c.title, "url": c.invite_link} for c in res["channels"]]
     return res
@@ -161,7 +173,7 @@ async def get_movie(body: CodeIn, u: dict = Depends(current_user)):
 
 @app.get("/api/top")
 async def top(u: dict = Depends(current_user)):
-    return [movie_json(m) for m in await top_movies(10)]
+    return await movies_json(await top_movies(10))
 
 
 @app.get("/api/search")
@@ -172,7 +184,7 @@ async def search(q: str, u: dict = Depends(current_user)):
     async with SessionLocal() as s:
         rows = (await s.execute(select(Movie).where(or_(
             Movie.title.ilike(f"%{q}%"), func.lower(Movie.code) == q.lower())).limit(20))).scalars().all()
-    return [movie_json(m) for m in rows]
+    return await movies_json(rows)
 
 
 @app.post("/api/vip/invoice")
@@ -190,13 +202,19 @@ async def a_stats(a=Depends(admin_user)):
     return await stats()
 
 
+@app.get("/api/admin/chart")
+async def a_chart(days: int = 14, a=Depends(admin_user)):
+    return [{"d": f"{d:%d.%m}", "n": n} for d, n in await daily_users(min(max(days, 7), 60))]
+
+
 @app.get("/api/admin/movies")
 async def a_movies(q: str = "", a=Depends(admin_user)):
     async with SessionLocal() as s:
         st = select(Movie).order_by(Movie.id.desc()).limit(200)
         if q:
             st = st.where(or_(Movie.title.ilike(f"%{q}%"), Movie.code.ilike(f"%{q}%")))
-        return [{**movie_json(m), "id": m.id} for m in (await s.execute(st)).scalars().all()]
+        ms = (await s.execute(st)).scalars().all()
+    return await movies_json(ms)
 
 
 class MovieEdit(BaseModel):
@@ -228,17 +246,13 @@ async def a_movie_edit(mid: int, body: MovieEdit, a=Depends(admin_user)):
 
 @app.delete("/api/admin/movies/{mid}")
 async def a_movie_del(mid: int, a=Depends(admin_user)):
-    async with SessionLocal() as s:
-        m = await s.get(Movie, mid)
-        if m:
-            await s.delete(m)
-            await s.commit()
+    await delete_movie(mid)
     return {"ok": True}
 
 
 @app.post("/api/admin/movies")
-async def a_movie_upload(code: str = Form(...), title: str = Form(...), vip_only: bool = Form(False),
-                         file: UploadFile = File(...), a=Depends(admin_user)):
+async def a_movie_upload(code: str = Form(...), title: str = Form(""), vip_only: bool = Form(False),
+                         part: int = Form(1), file: UploadFile = File(...), a=Depends(admin_user)):
     """Mini App'dan video yuklash (Telegram Bot API limiti: 50 MB). Kattaroq video — botga yuboring."""
     code = code.strip()
     if not CODE_RE.match(code):
@@ -246,17 +260,25 @@ async def a_movie_upload(code: str = Form(...), title: str = Form(...), vip_only
     data = await file.read()
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(400, "Fayl 50 MB dan katta. Katta videoni botga «KOD | NOM» izohi bilan yuboring.")
+    if part == 1 and not title.strip():
+        raise HTTPException(400, "Kino nomini kiriting")
     msg = await bot.send_video(a["id"], BufferedInputFile(data, file.filename or "movie.mp4"),
-                               caption=f"✅ Saqlandi: {title} ({code})")
+                               caption=f"✅ Saqlandi: {code} ({part}-qism)")
     fid = msg.video.file_id if msg.video else msg.document.file_id
+    if part > 1:  # serial: mavjud kinoga qism
+        ok, res = await add_part(code, fid, part)
+        if not ok:
+            raise HTTPException(400, str(res))
+        return {"ok": True, "info": f"{res}-qism qo'shildi"}
     async with SessionLocal() as s:
         m = (await s.execute(select(Movie).where(func.lower(Movie.code) == code.lower()))).scalar_one_or_none()
+        new = m is None
         if m:
             m.title, m.file_id, m.vip_only = title[:255], fid, vip_only
         else:
             s.add(Movie(code=code, title=title[:255], file_id=fid, vip_only=vip_only))
         await s.commit()
-    return {"ok": True}
+    return {"ok": True, "info": (await autopost(bot, code, title)) if new else "Yangilandi"}
 
 
 @app.get("/api/admin/users")
@@ -398,3 +420,38 @@ async def a_setting_put(body: SetIn, a=Depends(admin_user)):
 async def a_backup(a=Depends(admin_user)):
     return Response(await backup_bytes(), media_type="application/json",
                     headers={"Content-Disposition": "attachment; filename=backup.json"})
+
+
+@app.get("/api/admin/admins")
+async def a_admins(a=Depends(admin_user)):
+    return [{"id": i, "owner": i in OWNER_IDS} for i in sorted(ADMIN_IDS)] + [{"viewer_is_owner": a["id"] in OWNER_IDS}]
+
+
+class AdminIn(BaseModel):
+    ref: str  # ID yoki @username
+
+
+@app.post("/api/admin/admins")
+async def a_admin_add(body: AdminIn, a=Depends(owner_user)):
+    q = body.ref.strip().lstrip("@")
+    if q.isdigit():
+        uid = int(q)
+    else:
+        async with SessionLocal() as s:
+            u = (await s.execute(select(User).where(func.lower(User.username) == q.lower()))).scalars().first()
+        if not u:
+            raise HTTPException(400, "Bu username bazada yo'q. ID raqamini kiriting.")
+        uid = u.id
+    await add_admin(uid, a["id"])
+    try:
+        await bot.send_message(uid, "👮 Sizga admin huquqi berildi. /admin yozing.")
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.delete("/api/admin/admins/{uid}")
+async def a_admin_del(uid: int, a=Depends(owner_user)):
+    if not await remove_admin(uid):
+        raise HTTPException(400, "Egani o'chirib bo'lmaydi")
+    return {"ok": True}

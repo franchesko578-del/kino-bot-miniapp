@@ -22,3 +22,9 @@ Bot, foydalanuvchi Mini App, **admin Mini App** (`/admin`) va **bot ichidagi adm
 Telegram faqat 🔵 ko'k (`primary`), 🟢 yashil (`success`) va 🔴 qizil (`danger`) tugmani qo'llaydi.
 Sariq va qora uchun rasmiy rang yo'q — shuning uchun ular 🟨 / ⬛ belgisi bilan ko'rsatiladi.
 Reklama tugmalari: `Matn | https://havola | ko'k/yashil/sariq/qora/qizil`.
+
+## Qo'shimcha imkoniyatlar
+- **Serial:** admin panelda «Qism qo'shish» yoki kinolar ro'yxatidagi «➕ qism». Tezkor usul: videoga `KOD | NOM | 2` izoh yozing.
+- **Do'st taklif qilish:** Sozlamalarda `ref_bonus_days` (0 = o'chiq) va `ref_limit`. Faqat YANGI foydalanuvchi hisoblanadi.
+- **Kanalga avto-post:** Kanallar bo'limida yoqish/o'chirish va post kanalini o'rnatish (bot kanalda admin bo'lsin).
+- **Adminlar:** `ADMIN_IDS` dagilar — ega (o'chirib bo'lmaydi). Boshqa adminlarni faqat egalar panel orqali qo'shadi.

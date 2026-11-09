@@ -12,24 +12,35 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import func, select
 
-from config import ADMIN_IDS, WEBAPP_URL
+from config import ADMIN_IDS, OWNER_IDS, WEBAPP_URL
 from database.db import (
-    SETTINGS, S, Movie, Payment, SessionLocal, SubscriptionChannel, User,
+    SETTINGS, S, S_on, Movie, MoviePart, Payment, SessionLocal, SubscriptionChannel, User,
     set_setting,
 )
 from utils.keyboards import B, back, kb, parse_buttons, webapp_btn
 from utils.services import (
-    CODE_RE, BROADCAST, backup_bytes, broadcast, grant_vip, remove_vip, stats,
-    vip_active,
+    CODE_RE, BROADCAST, add_admin, add_part, autopost, backup_bytes, broadcast, chart_text,
+    daily_users, delete_movie, grant_vip, part_counts, remove_admin, remove_vip, stats, vip_active,
 )
 
 router = Router()
-router.message.filter(F.from_user.id.in_(ADMIN_IDS))
-router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
+
+
+def _is_admin(event) -> bool:
+    # ADMIN_IDS panel orqali o'zgaradi, shuning uchun har safar tekshiramiz
+    return bool(event.from_user and event.from_user.id in ADMIN_IDS)
+
+
+router.message.filter(_is_admin)
+router.callback_query.filter(_is_admin)
 
 
 class AddMovie(StatesGroup):
     code = State(); title = State(); video = State()
+class AddPart(StatesGroup):
+    code = State(); video = State()
+class AdminSt(StatesGroup):
+    add = State()
 class AddCh(StatesGroup):
     ref = State()
 class Bc(StatesGroup):
@@ -54,17 +65,19 @@ async def show(event, text: str, markup=None):
         await event.answer(text, reply_markup=markup)
 
 
-def home_kb():
+def home_kb(uid: int):
     rows = [
         [B("📊 Statistika", "blue", callback_data="adm:stats")],
         [B("🎬 Kino qo'shish", "green", callback_data="adm:addmovie"),
-         B("🗂 Kinolar", "blue", callback_data="adm:movies:0")],
-        [B("Foydalanuvchilar", "yellow", callback_data="adm:users"),
-         B("VIP", "black", callback_data="adm:vip")],
-        [B("📢 Kanallar", "blue", callback_data="adm:ch"),
-         B("📣 Reklama", "green", callback_data="adm:bc")],
-        [B("Sozlamalar", "yellow", callback_data="adm:set"),
-         B("Zaxira", "black", callback_data="adm:backup")],
+         B("Qism qo'shish", "yellow", callback_data="adm:addpart")],
+        [B("🗂 Kinolar", "blue", callback_data="adm:movies:0"),
+         B("Foydalanuvchilar", "yellow", callback_data="adm:users")],
+        [B("VIP", "black", callback_data="adm:vip"),
+         B("📢 Kanallar", "blue", callback_data="adm:ch")],
+        [B("📣 Reklama", "green", callback_data="adm:bc"),
+         B("Sozlamalar", "yellow", callback_data="adm:set")],
+        [B("Zaxira", "black", callback_data="adm:backup")]
+        + ([B("👮 Adminlar", "red", callback_data="adm:admins")] if uid in OWNER_IDS else []),
     ]
     if WEBAPP_URL:
         rows.append([webapp_btn("🧩 Admin Mini App", WEBAPP_URL + "/admin", "green")])
@@ -74,13 +87,13 @@ def home_kb():
 @router.message(Command("admin"))
 async def admin_cmd(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("🛠 <b>Admin panel</b>", reply_markup=home_kb())
+    await message.answer("🛠 <b>Admin panel</b>", reply_markup=home_kb(message.from_user.id))
 
 
 @router.callback_query(F.data == "adm:home")
 async def admin_home(call: CallbackQuery, state: FSMContext):
     await state.clear()
-    await show(call, "🛠 <b>Admin panel</b>", home_kb())
+    await show(call, "🛠 <b>Admin panel</b>", home_kb(call.from_user.id))
 
 
 @router.message(Command("cancel"))
@@ -99,7 +112,8 @@ async def adm_stats(call: CallbackQuery):
         f"⭐ Faol VIP: {s['vip']}\n🚫 Bloklangan: {s['banned']}\n"
         f"🎬 Kinolar: {s['movies']} · 👁 {s['views']} ko'rish\n"
         f"📢 Kanallar: {s['channels']}\n"
-        f"💳 To'lovlar: {s['payments']} ta · {s['stars']} ⭐"
+        f"💳 To'lovlar: {s['payments']} ta · {s['stars']} ⭐\n\n"
+        f"📈 <b>Kunlik yangi foydalanuvchilar (14 kun)</b>\n{chart_text(await daily_users(14))}"
     ), kb(back()))
 
 
@@ -154,20 +168,75 @@ async def add_movie_video(message: Message, state: FSMContext):
     d = await state.get_data()
     new = await save_movie(d["code"], d["title"], fid)
     await state.clear()
+    post = await autopost(message.bot, d["code"], d["title"]) if new else ""
     await message.answer(
-        f"✅ Kino {'qo‘shildi' if new else 'yangilandi'}: <b>{html.escape(d['title'])}</b> (<code>{html.escape(d['code'])}</code>)",
-        reply_markup=kb([B("➕ Yana qo'shish", "green", callback_data="adm:addmovie")], back()),
+        f"✅ Kino {'qo‘shildi' if new else 'yangilandi'}: <b>{html.escape(d['title'])}</b> (<code>{html.escape(d['code'])}</code>)"
+        + (f"\n{post}" if post else ""),
+        reply_markup=kb([B("➕ Yana qo'shish", "green", callback_data="adm:addmovie"),
+                         B("Qism qo'shish", "yellow", callback_data="adm:addpart")], back()),
     )
 
 
 @router.message(StateFilter(None), F.video, F.caption.contains("|"))
 async def quick_add(message: Message):
-    """Eski usul: videoga 'KOD | NOM' izoh yozib yuborish."""
-    code, title = [x.strip() for x in message.caption.split("|", 1)]
+    """Tezkor usul: videoga 'KOD | NOM' yoki qism uchun 'KOD | NOM | 2' izoh yozib yuborish."""
+    parts = [x.strip() for x in message.caption.split("|")]
+    code, title = parts[0], parts[1] if len(parts) > 1 else ""
     if not CODE_RE.match(code) or not title:
-        return await message.answer("❌ Format: KOD | KINO NOMI")
+        return await message.answer("❌ Format: KOD | KINO NOMI  yoki  KOD | NOMI | QISM RAQAMI")
+    if len(parts) > 2 and parts[2].isdigit():
+        ok, res = await add_part(code, message.video.file_id, int(parts[2]))
+        return await message.answer(f"✅ {res}-qism saqlandi." if ok else f"❌ {res}")
     new = await save_movie(code, title[:255], message.video.file_id)
-    await message.answer(f"✅ Kino {'qo‘shildi' if new else 'yangilandi'}!")
+    post = await autopost(message.bot, code, title) if new else ""
+    await message.answer(f"✅ Kino {'qo‘shildi' if new else 'yangilandi'}!" + (f"\n{post}" if post else ""))
+
+
+# ------------------------------ Qism qo'shish (serial) ------------------------------
+@router.callback_query(F.data == "adm:addpart")
+async def part_start(call: CallbackQuery, state: FSMContext):
+    await state.set_state(AddPart.code)
+    await show(call, "📺 Qaysi kinoga qism qo'shamiz? Kino <b>kodini</b> yuboring.\n/cancel — bekor qilish")
+
+
+@router.callback_query(F.data.startswith("adm:mpart:"))
+async def part_from_list(call: CallbackQuery, state: FSMContext):
+    async with SessionLocal() as s:
+        m = await s.get(Movie, int(call.data.split(":")[2]))
+    if not m:
+        return await call.answer("Topilmadi", show_alert=True)
+    await state.set_state(AddPart.video)
+    await state.update_data(code=m.code)
+    await call.message.answer(f"📺 <b>{html.escape(m.title)}</b> uchun videolarni ketma-ket yuboring (har biri keyingi qism bo'ladi).\nTugatish: /done")
+    await call.answer()
+
+
+@router.message(AddPart.code, F.text)
+async def part_code(message: Message, state: FSMContext):
+    code = message.text.strip()
+    async with SessionLocal() as s:
+        m = (await s.execute(select(Movie).where(func.lower(Movie.code) == code.lower()))).scalar_one_or_none()
+    if not m:
+        return await message.answer("❌ Bunday kodli kino yo'q. Kodni tekshiring.")
+    await state.update_data(code=m.code)
+    await state.set_state(AddPart.video)
+    await message.answer(f"📹 <b>{html.escape(m.title)}</b> uchun videolarni ketma-ket yuboring (har biri keyingi qism bo'ladi).\nTugatish: /done")
+
+
+@router.message(AddPart.video, Command("done"))
+async def part_done(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("✅ Tayyor.", reply_markup=kb(back()))
+
+
+@router.message(AddPart.video, F.video | F.document)
+async def part_video(message: Message, state: FSMContext):
+    fid = video_file_id(message)
+    if not fid:
+        return await message.answer("❌ Bu video emas.")
+    code = (await state.get_data())["code"]
+    ok, res = await add_part(code, fid)
+    await message.answer(f"✅ {res}-qism qo'shildi. Yana video yuboring yoki /done" if ok else f"❌ {res}")
 
 
 # ------------------------------ Kinolar ro'yxati ------------------------------
@@ -183,11 +252,15 @@ async def render_movies(call: CallbackQuery, page: int):
     async with SessionLocal() as s:
         total = await s.scalar(select(func.count(Movie.id)))
         items = (await s.execute(select(Movie).order_by(Movie.id.desc()).offset(page * PAGE).limit(PAGE))).scalars().all()
+    pc = await part_counts([m.id for m in items])
     rows, lines = [], []
     for m in items:
-        lines.append(f"{'⭐' if m.vip_only else '🆓'} <code>{html.escape(m.code)}</code> — {html.escape(m.title)} · 👁 {m.views or 0}")
+        n = pc.get(m.id, 1)
+        lines.append(f"{'⭐' if m.vip_only else '🆓'} <code>{html.escape(m.code)}</code> — {html.escape(m.title)} · 👁 {m.views or 0}"
+                     + (f" · 📺 {n} qism" if n > 1 else ""))
         rows.append([B(f"🗑 {m.code}", "red", callback_data=f"adm:mdel:{m.id}:{page}"),
-                     B("VIP ↔ Ochiq", "yellow", callback_data=f"adm:mvip:{m.id}:{page}")])
+                     B("VIP ↔ Ochiq", "yellow", callback_data=f"adm:mvip:{m.id}:{page}"),
+                     B("➕ qism", "green", callback_data=f"adm:mpart:{m.id}")])
     nav = []
     if page > 0:
         nav.append(B("◀️", "black", callback_data=f"adm:movies:{page-1}"))
@@ -199,11 +272,7 @@ async def render_movies(call: CallbackQuery, page: int):
 @router.callback_query(F.data.startswith("adm:mdel:"))
 async def movie_del(call: CallbackQuery):
     _, _, mid, page = call.data.split(":")
-    async with SessionLocal() as s:
-        m = await s.get(Movie, int(mid))
-        if m:
-            await s.delete(m)
-            await s.commit()
+    await delete_movie(int(mid))
     await render_movies(call, int(page))
 
 
@@ -351,8 +420,19 @@ async def channels(call: CallbackQuery, state: FSMContext):
         chs = (await s.execute(select(SubscriptionChannel))).scalars().all()
     rows = [[B(f"🗑 {c.title}", "red", callback_data=f"adm:chdel:{c.id}")] for c in chs]
     txt = "\n".join(f"• {html.escape(c.title)} — {c.invite_link}" for c in chs) or "Kanallar yo'q"
-    await show(call, f"📢 <b>Majburiy obuna kanallari</b>\n\n{txt}",
-               kb(*rows, [B("➕ Kanal qo'shish", "green", callback_data="adm:chadd")], back()))
+    on = S_on("autopost") and S("post_channel")
+    ap = f"📣 <b>Avto-post</b> (yangi kino kanalga): {'✅ yoqilgan → ' + html.escape(S('post_channel')) if on else '⛔ o‘chiq'}"
+    await show(call, f"📢 <b>Majburiy obuna kanallari</b>\n\n{txt}\n\n{ap}",
+               kb(*rows, [B("➕ Kanal qo'shish", "green", callback_data="adm:chadd")],
+                  [B("⛔ Avto-post o'chirish" if S_on("autopost") else "✅ Avto-post yoqish",
+                     "red" if S_on("autopost") else "green", callback_data="adm:aptoggle"),
+                   B("Post kanali", "yellow", callback_data="adm:se:post_channel")], back()))
+
+
+@router.callback_query(F.data == "adm:aptoggle")
+async def autopost_toggle(call: CallbackQuery, state: FSMContext):
+    await set_setting("autopost", "0" if S_on("autopost") else "1")
+    await channels(call, state)
 
 
 @router.callback_query(F.data == "adm:chadd")
@@ -497,3 +577,59 @@ async def backup(call: CallbackQuery):
     name = f"backup_{datetime.utcnow():%Y%m%d_%H%M}.json"
     await call.message.answer_document(BufferedInputFile(await backup_bytes(), name), caption="💾 Zaxira nusxa")
     await call.answer("Yuborildi")
+
+
+# ------------------------------ Adminlar (faqat egalar) ------------------------------
+def owner_only(event) -> bool:
+    return event.from_user.id in OWNER_IDS
+
+
+@router.callback_query(F.data == "adm:admins")
+async def admins_menu(call: CallbackQuery, state: FSMContext):
+    if not owner_only(call):
+        return await call.answer("Faqat bot egasi uchun", show_alert=True)
+    await state.clear()
+    extra = sorted(ADMIN_IDS - OWNER_IDS)
+    lines = [f"🔒 <code>{i}</code> — ega" for i in sorted(OWNER_IDS)] + [f"👮 <code>{i}</code>" for i in extra]
+    rows = [[B(f"🗑 {i}", "red", callback_data=f"adm:adel:{i}")] for i in extra]
+    await show(call, "👮 <b>Adminlar</b>\n\n" + "\n".join(lines),
+               kb(*rows, [B("➕ Admin qo'shish", "green", callback_data="adm:aadd")], back()))
+
+
+@router.callback_query(F.data == "adm:aadd")
+async def admin_add_start(call: CallbackQuery, state: FSMContext):
+    if not owner_only(call):
+        return await call.answer("Faqat bot egasi uchun", show_alert=True)
+    await state.set_state(AdminSt.add)
+    await show(call, "Yangi adminning <b>ID</b> raqamini yoki @username ini yuboring.\n"
+                     "(U botga kamida bir marta /start bosgan bo'lishi kerak. ID ni u botga /id yozib bilib oladi.)")
+
+
+@router.message(AdminSt.add, F.text)
+async def admin_add_do(message: Message, state: FSMContext):
+    if not owner_only(message):
+        return
+    q = message.text.strip().lstrip("@")
+    async with SessionLocal() as s:
+        if q.isdigit():
+            uid = int(q)
+        else:
+            u = (await s.execute(select(User).where(func.lower(User.username) == q.lower()))).scalars().first()
+            uid = u.id if u else None
+    if not uid:
+        return await message.answer("❌ Bu username bazada yo'q. ID raqamini yuboring.")
+    await add_admin(uid, message.from_user.id)
+    await state.clear()
+    try:
+        await message.bot.send_message(uid, "👮 Sizga admin huquqi berildi. /admin yozing.")
+    except Exception:
+        pass
+    await message.answer(f"✅ <code>{uid}</code> admin qilindi.", reply_markup=kb(back("adm:admins")))
+
+
+@router.callback_query(F.data.startswith("adm:adel:"))
+async def admin_del(call: CallbackQuery, state: FSMContext):
+    if not owner_only(call):
+        return await call.answer("Faqat bot egasi uchun", show_alert=True)
+    await remove_admin(int(call.data.split(":")[2]))
+    await admins_menu(call, state)

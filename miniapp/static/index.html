@@ -27,12 +27,15 @@ async function getMovie(code){
 const pages={
  async kino(){$("#view").innerHTML=`<div class="card"><h3>🎥 Kino kodi</h3><input id="code" placeholder="Kod yoki nom, masalan: 101" enterkeyhint="search">
   <button class="w b-green" onclick="go()">KINONI OLISH</button><div id="out" style="margin-top:10px"></div></div>`},
- async top(){const l=await api("/api/top");$("#view").innerHTML=`<div class="card"><h3>🔥 TOP 10</h3>`+(l.map((m,i)=>`<div class="item"><span>${i+1}. ${esc(m.title)} ${m.vip_only?'<span class="badge">⭐ VIP</span>':''}<br><span class="muted">kod: ${esc(m.code)} · 👁 ${m.views}</span></span><button class="b-blue" onclick="getMovie('${esc(m.code)}')">▶️</button></div>`).join("")||"Hozircha yo'q")+"</div>"},
+ async top(){const l=await api("/api/top");$("#view").innerHTML=`<div class="card"><h3>🔥 TOP 10</h3>`+(l.map((m,i)=>`<div class="item"><span>${i+1}. ${esc(m.title)} ${m.vip_only?'<span class="badge">⭐ VIP</span>':''}<br><span class="muted">kod: ${esc(m.code)} · 👁 ${m.views}${m.parts>1?" · 📺 "+m.parts+" qism":""}</span></span><button class="b-blue" onclick="getMovie('${esc(m.code)}')">▶️</button></div>`).join("")||"Hozircha yo'q")+"</div>"},
  async vip(){$("#view").innerHTML=`<div class="card"><h3>⭐ VIP obuna</h3><p>• Majburiy obunasiz foydalanish<br>• VIP kinolarga kirish</p>
   <p><b>${esc(cfg.vip_stars)} ⭐</b> / ${esc(cfg.vip_days)} kun</p><button class="w b-yellow" onclick="buy()">⭐ VIP SOTIB OLISH</button></div>`},
  async profil(){me=await api("/api/me",{method:"POST"});$("#view").innerHTML=`<div class="card"><h3>👤 Profil</h3><p>${esc(me.name)}<br><span class="muted">ID: ${me.id}</span></p>
   <p>${me.vip?"⭐ VIP: "+new Date(me.vip_until+"Z").toLocaleDateString()+" gacha":"VIP yo'q"}</p>
+  ${me.ref_bonus>0?`<hr style="border-color:#334155"><b>🎁 Do'st taklif qilish</b><p class="muted">Har bir yangi do'st uchun +${me.ref_bonus} kun VIP. Taklif qilganlar: <b>${me.ref_count}</b></p>
+  <button class="w b-yellow" onclick="inv()">📤 Do'stlarga yuborish</button>`:""}
   ${me.is_admin?'<button class="w b-black" onclick="location.href=\'/admin\'">🧩 Admin panel</button>':""}</div>`}};
+function inv(){tg.openTelegramLink("https://t.me/share/url?url="+encodeURIComponent(me.ref_link)+"&text="+encodeURIComponent("🎬 Kinolar boti — kodni yuboring, kino keladi!"))}
 function go(){const v=$("#code").value.trim();if(!v)return toast("Kodni kiriting");getMovie(v)}
 async function buy(){try{const r=await api("/api/vip/invoice",{method:"POST"});tg.openInvoice(r.link,s=>{if(s==="paid"){toast("🎉 VIP faollashdi");pages.profil()}})}catch(e){toast(e.message)}}
 function tab(n){document.querySelectorAll("#tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===n));pages[n]().catch(e=>toast(e.message))}
